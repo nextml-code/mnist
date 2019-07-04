@@ -16,7 +16,7 @@ def _get_data():
     index_train, index_validate = sklearn.model_selection.train_test_split(
         np.arange(len(x_train)),
         stratify=y_train,
-        test_size=0.999,
+        test_size=0.9998,
         random_state=1,
     )
 
@@ -34,6 +34,10 @@ def _get_data():
             y_test,
         )
     )
+
+
+def training_count():
+    return np.unique(_get_data()['train'][1], return_counts=True)
 
 
 def get_data(data_type):

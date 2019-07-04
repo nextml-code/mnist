@@ -29,9 +29,9 @@ def get_model():
             l.Conv2D(8, kernel_size=3, padding='same', activation=tf.nn.relu),
             max_pool,
             l.Flatten(),
-            l.Dense(32, activation=tf.nn.relu, kernel_regularizer=keras.regularizers.l2(0.001)),
+            l.Dense(32, activation=tf.nn.relu),
             # l.Dropout(0.4),
-            l.Dense(10, activation=tf.nn.softmax, kernel_regularizer=keras.regularizers.l2(0.001))
+            l.Dense(10, activation=tf.nn.softmax)
         ],
         name='probabilities'
     )(input)
@@ -83,21 +83,89 @@ def get_standard_ds(image, label):
         ))
     )
 
+
+def augment(ds, image_augmentor):
+    return ds.map(lambda image, label: (
+        tf.numpy_function(
+            func=image_augmentor.random_transform,
+            inp=[image],
+            Tout=[tf.float32]
+        )[0],
+        label
+    ))
+
+
+def shuffle_dataset(ds, buffer_size):
+    return (
+        ds
+        .repeat()
+        .shuffle(
+            buffer_size,
+            reshuffle_each_iteration=True,
+            # seed=seed
+        )
+    )
+
+
+def predict_dataset(ds, model, batch_size=60):
+    return (
+        ds
+        .batch(batch_size)
+        .map(lambda image, _: (
+            image,
+            tf.py_function(
+                func=model.predict_on_batch,
+                inp=[image],
+                Tout=tf.float32,
+            )
+        ))
+        # .map(lambda image, predicted: (
+        #     image,
+        #     predicted**2 / tf.reduce_sum(predicted**2, axis=-1, keepdims=True)
+        # ))
+        # .map(lambda image, predicted: (
+        #     image,
+        #     tf.cast(
+        #         tf.equal(predicted, tf.reduce_max(predicted, axis=-1, keepdims=True)),
+        #         tf.float32
+        #     )
+        # ))
+        .unbatch()
+    )
+
+
+def merge_datasets(ds_a, ds_b, n_a, n_b):
+    return (
+        tf.data.Dataset.zip((
+            ds_a.batch(n_a),
+            ds_b.batch(n_b)
+        ))
+        .flat_map(lambda batch_a, batch_b: (
+            tf.data.Dataset.from_tensors(batch_a)
+            .unbatch()
+            .concatenate(
+                tf.data.Dataset.from_tensors(batch_b)
+                .unbatch()
+            )
+        ))
+    )
+
 # %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument('--max_epochs', default=100, type=int)
     # parser.add_argument('--steps_per_epoch', default=100, type=int)
-    parser.add_argument('--learning_rate', default=0.001, type=float)
-    # parser.add_argument('--batch_size', default=100, type=int)
-    # parser.add_argument('--gradient_clipvalue', default=1.0, type=float)
-    # parser.add_argument('--seed', default=71751, type=int)
+    parser.add_argument('--learning_rate', default=0.01, type=float)
+    parser.add_argument('--n_labeled', default=1, type=int)
+    parser.add_argument('--n_unlabeled', default=1, type=int)
+    parser.add_argument('--batch_size', default=120, type=int)
+    parser.add_argument('--supervised_epochs', default=5, type=int)
+    parser.add_argument('--gradient_clipvalue', default=1.0, type=float)
+    parser.add_argument('--seed', default=np.random.randint(1000), type=int)
 
     args = parser.parse_args()
     config = vars(args)
     config.update(
-        gradient_clipvalue=1,
         max_epochs=100,
     )
 
@@ -116,134 +184,56 @@ if __name__ == '__main__':
         rotation_range=30,
         width_shift_range=0.1,
         height_shift_range=0.1,
-        shear_range=45,
+        shear_range=30,
         zoom_range=[0.6, 1.2],
+        # brightness_range=[0.1, 1],
     )
 
-    ds_unsupervised = (
-        ds_validate
-        .repeat()
-        .shuffle(
-            buffer_size=len(label_validate),
-            reshuffle_each_iteration=True,
-            # seed=seed
-        )
-        .batch(60)
-        .map(lambda image, _: (
-            image,
-            tf.py_function(
-                func=model.predict_on_batch,
-                inp=[image],
-                Tout=tf.float32,
-            )
-        ))
-        # .map(lambda image, predicted: (
-        #     image,
-        #     predicted**2 / tf.reduce_sum(predicted**2, axis=-1, keepdims=True)
-        # ))
-        .map(lambda image, predicted: (
-            image,
-            tf.cast(
-                tf.equal(predicted, tf.reduce_max(predicted, axis=-1, keepdims=True)),
-                tf.float32
-            )
-        ))
-        .unbatch()
-        .map(lambda image, predicted: (
-            tf.numpy_function(
-                func=image_augmentor.random_transform,
-                inp=[image],
-                Tout=[tf.float32]
-            )[0],
-            predicted
-        ))
-        # .map(lambda image, predicted: (
-        #     tf.numpy_function(
-        #         func=lambda image: keras.preprocessing.image.ImageDataGenerator(
-        #             fill_mode='constant',
-        #             cval=0.0,
-        #         ).apply_transform(
-        #             image,
-        #             dict(
-        #                 theta=np.random.uniform(-10, 10)/180*np.pi, # Rotation angle in degrees.
-        #                 # tx=np.random.uniform(-0.25, 0.25)*28, # Shift in the x direction.
-        #                 # ty=np.random.uniform(-0.25, 0.25)*28, # Shift in the y direction.
-        #             )
-        #         ),
-        #         inp=[image],
-        #         Tout=[tf.float32]
-        #     ),
-        #     predicted
-        # ))
+    # import matplotlib.pyplot as plt
+    # image = np.zeros((28, 28, 1))
+    # image[5:23, 5:23] = 1.0
+    # plt.imshow(image[:,:,0], cmap='gray')
+    # plt.imshow(image_augmentor.random_transform(image)[:,:,0], cmap='gray', vmax=255.0)
+
+    ds_train_shuffled = shuffle_dataset(ds_train, len(label_train))
+
+    ds_predicted_shuffled = predict_dataset(
+        shuffle_dataset(ds_validate, len(label_validate)), model
     )
 
     # next(iter(ds_train.batch(10)))[1].shape
     # next(iter(ds_unsupervised))[0].shape
 
     # import matplotlib.pyplot as plt
-    # plt.imshow(next(iter(ds_unsupervised.skip(2)))[0][:,:,0])
+    # plt.imshow(next(iter(ds_predicted_shuffled.skip(2)))[0][:,:,0], cmap='gray', vmax=1)
 
-    ds_semisupervised = (
-        tf.data.Dataset.zip((
-            (
-                ds_train
-                .repeat()
-                .shuffle(
-                    buffer_size=len(label_validate),
-                    reshuffle_each_iteration=True,
-                    # seed=seed
-                )
-                .batch(1)
-            ),
-            ds_unsupervised.batch(1)
-        ))
-        .flat_map(
-            lambda labeled_batch, unsupervised_batch: (
-                tf.data.Dataset.from_tensors(labeled_batch)
-                .unbatch()
-                .concatenate(
-                    tf.data.Dataset.from_tensors(unsupervised_batch)
-                    .unbatch()
-                )
-            )
+    ds_semisupervised = merge_datasets(
+        ds_train_shuffled,
+        ds_predicted_shuffled,
+        config['n_labeled'],
+        config['n_unlabeled']
+    )
+
+    # it = iter(augment(ds_semisupervised, image_augmentor))
+    # import matplotlib.pyplot as plt
+    # plt.imshow(next(it)[0][:,:,0], cmap='gray', vmax=1.0)
+
+    if config['supervised_epochs'] >= 1:
+        model.fit(
+            augment(ds_train_shuffled, image_augmentor).batch(60),
+            validation_data=ds_validate.batch(1024*4),
+            epochs=config['supervised_epochs'],
+            steps_per_epoch=100,
+            verbose=1
         )
-    )
-
-    # next(iter(ds_semisupervised.batch(10)))[1].shape
-
-    model.fit(
-        (
-            ds_train
-            .repeat()
-            .shuffle(
-                buffer_size=len(label_train),
-                reshuffle_each_iteration=True,
-                # seed=seed
-            )
-            .batch(60)
-        ),
-        validation_data=ds_validate.batch(1024),
-        epochs=5,
-        steps_per_epoch=100,
-        verbose=1
-    )
 
 
     os.makedirs('checkpoints')
     model.fit(
-        # (
-        #     ds_train
-        #     .repeat()
-        #     .shuffle(
-        #         buffer_size=len(label_train),
-        #         reshuffle_each_iteration=True,
-        #         # seed=seed
-        #     )
-        #     .batch(60)
-        # ),
-        ds_semisupervised.batch(120),
+        # augment(ds_train_shuffled, image_augmentor).batch(config['batch_size']),
+        augment(ds_semisupervised, image_augmentor).batch(config['batch_size']),
         # ds_unsupervised.batch(64),
-        validation_data=ds_validate.batch(1024),
+        validation_data=ds_validate.batch(1024*4),
         # batch_size=1024,
         epochs=config['max_epochs'],
         steps_per_epoch=100,
@@ -262,12 +252,12 @@ if __name__ == '__main__':
                 # monitor='val_loss',
                 verbose=1
             ),
-            # keras.callbacks.EarlyStopping(
-            #     monitor='val_loss',
-            #     min_delta=1e-2,
-            #     patience=10,
-            #     verbose=1
-            # ),
+            keras.callbacks.EarlyStopping(
+                monitor='val_categorical_accuracy',
+                min_delta=1e-2,
+                patience=10,
+                verbose=1
+            ),
         ],
         verbose=1
     )
@@ -275,4 +265,7 @@ if __name__ == '__main__':
 # [ ] verify model changes
 # [ ] prefetch lots of predictions
 # [ ] predict full dataset then run X epochs, repeat
-# [ ] augmentation
+# [x] augmentation unsupervised
+# [x] augmentation on training too
+# [ ] handle overfitting before sharpen
+# [ ] noisy network
