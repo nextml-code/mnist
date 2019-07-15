@@ -1,5 +1,20 @@
-- model: mnist
-  description: mnist-model
+- model: supervised
+  description: supervised baseline model
   operations:
     train:
-      main: train
+      main: supervised
+- model: semi
+  description: semi-supervised model with standard augmentation
+  operations:
+    train:
+      main: semi
+- model: mixup
+  description: mixup model
+  operations:
+    train:
+      main: mixup
+- model: mixmatch
+  description: mixmatch model
+  operations:
+    train:
+      main: mixmatch
