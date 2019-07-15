@@ -104,7 +104,8 @@ def merge_datasets(ds_a, ds_b, n_a, n_b):
 
 def get_mixup_weights():
     # p = tfp.distributions.Beta(a, b).sample(shape)
-    p = 1 - tf.abs(tfp.distributions.Beta(0.5, 0.5).sample((1,)))
+    p = tfp.distributions.Beta(0.5, 0.5).sample((1,))
+    p = tf.maximum(p, 1 - p)
     return tf.concat([p, (1 - p)], axis=0)
 
 
