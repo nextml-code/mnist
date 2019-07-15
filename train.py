@@ -4,31 +4,12 @@ if len(physical_devices) > 0:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 import tensorflow.keras as keras
+import tensorflow_probability as tfp
 import numpy as np
 import os
 import argparse
 
 import problem
-
-
-class Noisy(tf.keras.layers.Layer):
-    def __init__(self, loss_weight):
-        super().__init__()
-        self.loss_weight = loss_weight
-
-    def build(self, input_shape):
-        # print(input_shape)
-        # self._input_shape = input_shape
-        self.kernel = self.add_variable(
-            'kernel',
-            shape=[input_shape[-1]]
-        )
-
-    def call(self, input, training=False):
-        multiplier = tf.nn.softplus(self.kernel)
-        self.add_loss(self.loss_weight*tf.reduce_mean(-multiplier), inputs=False)
-
-        return input + multiplier*tf.random.normal((1 , input.shape[-1]))
 
 
 def get_model(config):
@@ -40,18 +21,12 @@ def get_model(config):
 
     probabilities = tf.keras.Sequential(
         [
-            l.Conv2D(64, kernel_size=5, padding='same', activation=tf.nn.relu),
+            l.Conv2D(20, kernel_size=5, padding='same', activation=tf.nn.relu),
             max_pool,
-            l.Conv2D(32, kernel_size=5, padding='same', activation=tf.nn.relu),
-            max_pool,
-            l.Conv2D(16, kernel_size=3, padding='same', activation=tf.nn.relu),
-            max_pool,
-            l.Conv2D(8, kernel_size=3, padding='same', activation=tf.nn.relu),
+            l.Conv2D(50, kernel_size=5, padding='same', activation=tf.nn.relu),
             max_pool,
             l.Flatten(),
-            l.Dense(32, activation=tf.nn.relu),
-            Noisy(config['noisy_weight']),
-            # l.Dropout(0.4), # config['dropout']),
+            l.Dense(100, activation=tf.nn.relu),
             l.Dense(10, activation=tf.nn.softmax)
         ],
         name='probabilities'
@@ -106,11 +81,11 @@ def get_standard_ds(image, label):
 
 
 def augment(image, image_augmentor):
-    return tf.numpy_function(
+    return tf.reshape(tf.numpy_function(
         func=image_augmentor.random_transform,
         inp=[image],
         Tout=[tf.float32]
-    )[0]
+    )[0], problem.IMAGE_SHAPE + [1])
 
 
 def shuffle_dataset(ds, buffer_size):
@@ -159,6 +134,31 @@ def merge_datasets(ds_a, ds_b, n_a, n_b):
                 .unbatch()
             )
         ))
+    )
+
+
+def get_beta_weights(shape, a, b):
+    # p = tfp.distributions.Beta(a, b).sample(shape)
+    p = 1 - tf.abs(tfp.distributions.Beta(0.5, 0.5).sample(shape))
+    return tf.concat([p, (1 - p)], axis=0)
+
+# tfp.distributions.Beta(a, b).sample(shape)
+# tf.einsum('i...,i->...', tf.ones((2, 28, 28, 1)), tf.ones((2,))/5)
+
+def mixup_items(items, weight_func):
+    weights = weight_func(1)
+    weights /= tf.reduce_sum(weights)
+
+    return tuple([
+        tf.einsum('i...,i->...', tf.stack(variable, axis=0), weights)
+        for variable in zip(*items)
+    ])
+
+
+def mixup_datasets(datasets, weight_func):
+    return (
+        tf.data.Dataset.zip(datasets)
+        .map(lambda *items: mixup_items(items, weight_func))
     )
 
 # %%
@@ -212,40 +212,63 @@ if __name__ == '__main__':
 
     ds_train_shuffled = shuffle_dataset(ds_train, len(label_train))
 
-    ds_predicted_shuffled = (
-        shuffle_dataset(ds_validate, len(label_validate))
-        .map(lambda image, _: (image, augment(image, image_augmentor)))
-        .batch(config['n_unlabeled'])
-        .map(lambda image, augmented_image: (
-            image,
-            predict_batch(augmented_image)
-        ))
-        .map(lambda image, predicted: (
-            image,
-            sharpen(predicted, config['sharpen'])
-        ))
-        .unbatch()
-    )
-
-    # next(iter(ds_train.batch(10)))[1].shape
-    # next(iter(ds_unsupervised))[0].shape
-
-    # import matplotlib.pyplot as plt
-    # plt.imshow(next(iter(ds_predicted_shuffled.skip(2)))[0][:,:,0], cmap='gray', vmax=1)
+    sharpen_exponent = 1
+    def _sharpen(predicted):
+        return sharpen(predicted, sharpen_exponent)
 
     if config['n_unlabeled'] == 0:
-        ds_semisupervised = ds_train_shuffled
+        ds_semisupervised = ds_train_shuffled.map(lambda image, label: (
+            augment(image, image_augmentor),
+            label
+        ))
     else:
-        ds_semisupervised = merge_datasets(
-            ds_train_shuffled.map(lambda image, label: (image, label, 1.0)),
-            ds_predicted_shuffled.map(lambda image, label: (image, label, 0.1)),
-            config['n_labeled'],
-            config['n_unlabeled']
+        ds_predicted_shuffled = (
+            shuffle_dataset(ds_validate, len(label_validate))
+            .map(lambda image, _: (image, augment(image, image_augmentor)))
+            .batch(config['n_unlabeled'])
+            .map(lambda image, augmented_image: (
+                image,
+                predict_batch(augmented_image)
+            ))
+            .map(lambda image, predicted: (
+                image,
+                _sharpen(predicted)
+            ))
+            .unbatch()
         )
 
-    # it = iter(augment(ds_semisupervised, image_augmentor))
-    # import matplotlib.pyplot as plt
-    # plt.imshow(next(it)[0][:,:,0], cmap='gray', vmax=1.0)
+        # next(iter(ds_train.batch(10)))[1].shape
+        # next(iter(ds_unsupervised))[0].shape
+
+        # import matplotlib.pyplot as plt
+        # plt.imshow(next(iter(ds_predicted_shuffled.skip(2)))[0][:,:,0], cmap='gray', vmax=1)
+
+        ds_semisupervised = mixup_datasets(
+            (
+                ds_train_shuffled.map(lambda image, label: (
+                    augment(image, image_augmentor),
+                    label
+                )),
+                ds_predicted_shuffled.map(lambda image, label: (
+                    augment(image, image_augmentor),
+                    label
+                ))
+            ),
+            lambda shape: get_beta_weights(shape, a=8, b=1)
+        )
+
+        # ds_semisupervised = merge_datasets(
+        #     ds_train_shuffled.map(lambda image, label: (image, label, 1.0)),
+        #     ds_predicted_shuffled.map(lambda image, label: (image, label, 0.1)),
+        #     config['n_labeled'],
+        #     config['n_unlabeled']
+        # )
+
+    it = iter(ds_semisupervised)
+    import matplotlib.pyplot as plt
+    next(it)[1].shape
+    plt.imshow(next(it)[0][:,:,0], cmap='gray', vmax=1.0)
+    plt.show()
 
     if config['supervised_epochs'] >= 1:
         model.fit(
@@ -259,18 +282,29 @@ if __name__ == '__main__':
             verbose=1
         )
 
+    def update_sharpening(epoch, logs):
+        accuracy = logs['val_categorical_accuracy']
+        if accuracy <= 0.5:
+            sharpen_exponent = 1
+        else:
+            sharpen_exponent = 2 # np.exp((accuracy - 0.5)*3)
+        print(f'update_sharpening sharpen_exponent: {sharpen_exponent:.2f}')
 
     os.makedirs('checkpoints')
     model.fit(
-        # augment(ds_train_shuffled, image_augmentor).batch(config['batch_size']),
-        ds_semisupervised.map(lambda image, label, weight: (
-            augment(image, image_augmentor),
-            label,
-            weight
-        )).batch(config['batch_size']),
+        # ds_train_shuffled.map(lambda image, label: (
+        #     augment(image, image_augmentor),
+        #     label
+        # )).batch(config['batch_size']),
+        ds_semisupervised.batch(config['batch_size']),
+        # ds_semisupervised.map(lambda image, label, weight: (
+        #     augment(image, image_augmentor),
+        #     label,
+        #     weight
+        # )).batch(config['batch_size']),
         validation_data=ds_validate.batch(1024*4),
         epochs=config['max_epochs'],
-        steps_per_epoch=100,
+        steps_per_epoch=10,
         callbacks=[
             keras.callbacks.TensorBoard(
                 log_dir='tb',
@@ -294,14 +328,17 @@ if __name__ == '__main__':
                 min_lr=0.00001,
                 verbose=1
             ),
-            keras.callbacks.EarlyStopping(
-                monitor='val_categorical_accuracy',
-                mode='max',
-                min_delta=1e-2,
-                patience=30,
-                verbose=1,
-                restore_best_weights=True
-            ),
+            # keras.callbacks.EarlyStopping(
+            #     monitor='val_categorical_accuracy',
+            #     mode='max',
+            #     min_delta=1e-2,
+            #     patience=15,
+            #     verbose=1,
+            #     restore_best_weights=True
+            # ),
+            keras.callbacks.LambdaCallback(
+                on_epoch_end=update_sharpening
+            )
         ],
         verbose=1
     )
