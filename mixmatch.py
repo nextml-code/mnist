@@ -48,6 +48,7 @@ if __name__ == '__main__':
         data.shuffle_dataset(ds_validate, len(label_validate))
         .map(lambda image, _: (image, data.augment(image)))
         .batch(int(config['batch_size']/2))
+        # [ ] predict multiple images and take average prediction?
         .map(lambda image, augmented_image: (
             image,
             data.predict_batch(model, augmented_image)
@@ -59,16 +60,22 @@ if __name__ == '__main__':
         .unbatch()
     )
 
-    ds_fit = data.mixup_datasets((
-        ds_train_shuffled.map(lambda image, label: (
-            data.augment(image),
-            label
-        )),
-        ds_predicted_shuffled.map(lambda image, label: (
-            data.augment(image),
-            label
-        ))
-    ))
+    ds_fit_train = ds_train_shuffled.map(lambda image, label: (
+        data.augment(image),
+        label
+    )).map(lambda image, label: (image, label, 1.0))
+
+    ds_fit_predicted = ds_predicted_shuffled.map(lambda image, label: (
+        data.augment(image),
+        label
+    )).map(lambda image, label: (image, label, 10.0))
+
+    # [ ] try same weighting scheme as in mixmatch?
+    ds_fit = data.merge_datasets((
+        data.mixup_datasets((ds_fit_train, ds_fit_train)),
+        data.mixup_datasets((ds_fit_train, ds_fit_predicted)),
+        data.mixup_datasets((ds_fit_predicted, ds_fit_predicted)),
+    ), (4, 4, 1))
 
     def update_sharpening(epoch, logs):
         accuracy = logs['val_categorical_accuracy']

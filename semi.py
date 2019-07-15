@@ -64,10 +64,11 @@ if __name__ == '__main__':
     )
 
     ds_fit = data.merge_datasets(
-        ds_train_shuffled.map(lambda image, label: (image, label, 1.0)),
-        ds_predicted_shuffled.map(lambda image, label: (image, label, config['unlabeled_weight'])),
-        config['n_labeled'],
-        config['n_unlabeled']
+        (
+            ds_train_shuffled.map(lambda image, label: (image, label, 1.0)),
+            ds_predicted_shuffled.map(lambda image, label: (image, label, config['unlabeled_weight'])),
+        ),
+        (config['n_labeled'], config['n_unlabeled'])
     ).map(lambda image, label, weight: (
         data.augment(image),
         label,

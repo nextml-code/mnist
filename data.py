@@ -7,6 +7,7 @@ import tensorflow.keras as keras
 import tensorflow_probability as tfp
 import numpy as np
 import os
+from functools import reduce
 import argparse
 
 import problem
@@ -78,27 +79,20 @@ def argmax_sharpen():
 
 
 def predict_batch(model, image):
-    return tf.py_function(
+    return tf.reshape(tf.py_function(
         func=model.predict_on_batch,
         inp=[image],
         Tout=tf.float32,
-    )
+    ), (-1, 10,))
 
 
-def merge_datasets(ds_a, ds_b, n_a, n_b):
+def merge_datasets(datasets, ns):
     return (
-        tf.data.Dataset.zip((
-            ds_a.batch(n_a),
-            ds_b.batch(n_b)
-        ))
-        .flat_map(lambda batch_a, batch_b: (
-            tf.data.Dataset.from_tensors(batch_a)
-            .unbatch()
-            .concatenate(
-                tf.data.Dataset.from_tensors(batch_b)
-                .unbatch()
-            )
-        ))
+        tf.data.Dataset.zip(tuple(ds.batch(n) for ds, n in zip(datasets, ns)))
+        .flat_map(lambda *batches: reduce(tf.data.Dataset.concatenate, [
+            tf.data.Dataset.from_tensors(batch).unbatch()
+            for batch in batches
+        ]))
     )
 
 
