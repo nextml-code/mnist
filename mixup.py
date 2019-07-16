@@ -40,16 +40,12 @@ if __name__ == '__main__':
 
     ds_train_shuffled = data.shuffle_dataset(ds_train, len(label_train))
 
-    ds_fit = data.mixup_datasets((
-        ds_train_shuffled.map(lambda image, label: (
-            data.augment(image),
-            label
-        )),
-        ds_train_shuffled.map(lambda image, label: (
-            data.augment(image),
-            label
-        ))
+    ds_fit_train = ds_train_shuffled.map(lambda image, label: (
+        data.augment(image),
+        label
     ))
+
+    ds_fit = data.mixup_datasets((ds_fit_train, ds_fit_train.skip(123)))
 
     os.makedirs('checkpoints')
     model.fit(

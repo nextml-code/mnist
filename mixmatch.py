@@ -69,9 +69,9 @@ if __name__ == '__main__':
     ))
 
     ds_fit = data.merge_datasets((
-        # data.mixup_datasets((ds_fit_train, ds_fit_train.skip(5))).map(lambda image, label: (image, label, 1.0)),
+        data.mixup_datasets((ds_fit_train, ds_fit_train)).map(lambda image, label: (image, label, 1.0)),
         data.mixup_datasets((ds_fit_train.skip(15), ds_fit_predicted)).map(lambda image, label: (image, label, 1.0)),
-        # data.mixup_datasets((ds_fit_predicted.skip(100), ds_fit_predicted.skip(500))).map(lambda image, label: (image, label, 1.0)),
+        data.mixup_datasets((ds_fit_predicted.skip(100), ds_fit_predicted.skip(500))).map(lambda image, label: (image, label, 1.0)),
     ), (1, 1, 1))
 
     # it = iter(ds_fit)
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     # plt.show()
     # plt.imshow(item[0][..., 0], cmap='gray')
     # plt.show()
-    # %%
+    # # %%
 
     def update_sharpening(epoch, logs):
         accuracy = logs['val_categorical_accuracy']
