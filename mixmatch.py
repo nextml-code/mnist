@@ -40,47 +40,54 @@ if __name__ == '__main__':
 
     ds_train_shuffled = data.shuffle_dataset(ds_train, len(label_train))
 
-    sharpen_exponent = 1
+    sharpen_exponent = 2
     def _sharpen(predicted):
         return data.sharpen(predicted, sharpen_exponent)
 
     ds_predicted_shuffled = (
         data.shuffle_dataset(ds_validate, len(label_validate))
-        .map(lambda image, _: (image, data.augment(image)))
+        .map(lambda image, _: (
+            image, data.augment(image)
+        ))
         .batch(int(config['batch_size']/2))
         # [ ] predict multiple images and take average prediction?
         .map(lambda image, augmented_image: (
-            image,
-            data.predict_batch(model, augmented_image)
+            image, data.predict_batch(model, augmented_image)
         ))
         .map(lambda image, predicted: (
-            image,
-            _sharpen(predicted)
+            image, _sharpen(predicted)
         ))
         .unbatch()
     )
 
     ds_fit_train = ds_train_shuffled.map(lambda image, label: (
-        data.augment(image),
-        label
-    )).map(lambda image, label: (image, label, 1.0))
+        data.augment(image), label
+    ))
 
     ds_fit_predicted = ds_predicted_shuffled.map(lambda image, label: (
-        data.augment(image),
-        label
-    )).map(lambda image, label: (image, label, 10.0))
+        data.augment(image), label
+    ))
 
-    # [ ] try same weighting scheme as in mixmatch?
     ds_fit = data.merge_datasets((
-        data.mixup_datasets((ds_fit_train, ds_fit_train)),
-        data.mixup_datasets((ds_fit_train, ds_fit_predicted)),
-        data.mixup_datasets((ds_fit_predicted, ds_fit_predicted)),
-    ), (4, 4, 1))
+        # data.mixup_datasets((ds_fit_train, ds_fit_train.skip(5))).map(lambda image, label: (image, label, 1.0)),
+        data.mixup_datasets((ds_fit_train.skip(15), ds_fit_predicted)).map(lambda image, label: (image, label, 1.0)),
+        # data.mixup_datasets((ds_fit_predicted.skip(100), ds_fit_predicted.skip(500))).map(lambda image, label: (image, label, 1.0)),
+    ), (1, 1, 1))
+
+    # it = iter(ds_fit)
+    # import matplotlib.pyplot as plt
+    # # %%
+    # item = next(it)
+    # plt.bar(np.arange(10), item[1])
+    # plt.show()
+    # plt.imshow(item[0][..., 0], cmap='gray')
+    # plt.show()
+    # %%
 
     def update_sharpening(epoch, logs):
         accuracy = logs['val_categorical_accuracy']
         if accuracy <= 0.5:
-            sharpen_exponent = 1
+            sharpen_exponent = 2
         else:
             sharpen_exponent = 2 # np.exp((accuracy - 0.5)*3)
         print(f'update_sharpening sharpen_exponent: {sharpen_exponent:.2f}')
