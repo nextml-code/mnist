@@ -15,7 +15,7 @@ import problem
 def get_model(config):
     l = tf.keras.layers
 
-    input = l.Input(problem.IMAGE_SHAPE + [1], name='image')
+    image = l.Input(problem.IMAGE_SHAPE + [1], name='image')
 
     max_pool = l.MaxPooling2D((2, 2), padding='same')
 
@@ -30,9 +30,9 @@ def get_model(config):
             l.Dense(10, activation=tf.nn.softmax)
         ],
         name='probabilities'
-    )(input)
+    )(image)
 
-    return keras.models.Model(inputs=input, outputs=probabilities)
+    return keras.models.Model(inputs=image, outputs=probabilities)
 
 
 def compile_model(model, config):

@@ -21,6 +21,11 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', default=0.001, type=float)
     parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--gradient_clipvalue', default=2.0, type=float)
+    parser.add_argument('--n_predictions', default=10, type=int)
+    parser.add_argument('--sharpen_exponent', default=2.0, type=float)
+    parser.add_argument('--n_mixup_supervised', default=1, type=int)
+    parser.add_argument('--n_mixup_semisupervised', default=1, type=int)
+    parser.add_argument('--n_mixup_unsupervised', default=1, type=int)
     parser.add_argument('--seed', default=np.random.randint(1000), type=int)
 
     args = parser.parse_args()
@@ -39,40 +44,52 @@ if __name__ == '__main__':
     architecture.compile_model(model, config)
 
     ds_train_shuffled = data.shuffle_dataset(ds_train, len(label_train))
+    ds_validate_shuffled = data.shuffle_dataset(ds_validate, len(label_validate))
 
-    sharpen_exponent = 2
-    def _sharpen(predicted):
-        return data.sharpen(predicted, sharpen_exponent)
-
-    ds_predicted_shuffled = (
-        data.shuffle_dataset(ds_validate, len(label_validate))
-        .map(lambda image, _: (
-            image, data.augment(image)
+    ds_predictions_shuffled = (
+        ds_validate_shuffled
+        .batch(1)
+        .flat_map(lambda *batch: (
+            tf.data.Dataset.from_tensors(batch).repeat(config['n_predictions']).unbatch()
         ))
-        .batch(int(config['batch_size']/2))
-        # [ ] predict multiple images and take average prediction?
-        .map(lambda image, augmented_image: (
-            image, data.predict_batch(model, augmented_image)
-        ))
-        .map(lambda image, predicted: (
-            image, _sharpen(predicted)
-        ))
+        .map(lambda image, _: data.augment(image))
+        .batch(config['batch_size']*config['n_predictions'])
+        .map(lambda image: data.predict_batch(model, image))
+        .map(lambda prediction: data.sharpen(prediction, config['sharpen_exponent']))
         .unbatch()
+        .batch(config['n_predictions'])
+        .map(lambda predictions: tf.reduce_mean(predictions, axis=0))
     )
 
-    ds_fit_train = ds_train_shuffled.map(lambda image, label: (
+    ds_unsupervised_shuffled = tf.data.Dataset.zip((
+        ds_validate_shuffled.map(lambda image, _: image),
+        ds_predictions_shuffled
+    ))
+
+    ds_fit_supervised = ds_train_shuffled.map(lambda image, label: (
         data.augment(image), label
     ))
 
-    ds_fit_predicted = ds_predicted_shuffled.map(lambda image, label: (
+    ds_fit_unsupervised = ds_unsupervised_shuffled.map(lambda image, label: (
         data.augment(image), label
     ))
 
-    ds_fit = data.merge_datasets((
-        data.mixup_datasets((ds_fit_train, ds_fit_train)).map(lambda image, label: (image, label, 1.0)),
-        data.mixup_datasets((ds_fit_train.skip(15), ds_fit_predicted)).map(lambda image, label: (image, label, 1.0)),
-        data.mixup_datasets((ds_fit_predicted.skip(100), ds_fit_predicted.skip(500))).map(lambda image, label: (image, label, 1.0)),
-    ), (1, 1, 1))
+    ds_fit = data.merge_datasets(
+        (
+            ds_fit_supervised.map(lambda image, label: (image, label, 1.0)),
+            ds_fit_unsupervised.map(lambda image, label: (image, label, 1.0)),
+            data.mixup_datasets((ds_fit_supervised, ds_fit_supervised)).map(lambda image, label: (image, label, 1.0)),
+            data.mixup_datasets((ds_fit_supervised.skip(15), ds_fit_unsupervised)).map(lambda image, label: (image, label, 1.0)),
+            data.mixup_datasets((ds_fit_unsupervised.skip(100), ds_fit_unsupervised.skip(500))).map(lambda image, label: (image, label, 1.0)),
+        ),
+        (
+            0,
+            0,
+            config['n_mixup_supervised'],
+            config['n_mixup_semisupervised'],
+            config['n_mixup_unsupervised']
+        )
+    )
 
     # it = iter(ds_fit)
     # import matplotlib.pyplot as plt
@@ -84,13 +101,12 @@ if __name__ == '__main__':
     # plt.show()
     # # %%
 
-    def update_sharpening(epoch, logs):
-        accuracy = logs['val_categorical_accuracy']
-        if accuracy <= 0.5:
-            sharpen_exponent = 2
-        else:
-            sharpen_exponent = 2 # np.exp((accuracy - 0.5)*3)
-        print(f'update_sharpening sharpen_exponent: {sharpen_exponent:.2f}')
+    best_val_categorical_accuracy = 0
+    def update_best(epoch, logs):
+        global best_val_categorical_accuracy
+        if logs['val_categorical_accuracy'] >= best_val_categorical_accuracy:
+            best_val_categorical_accuracy = logs['val_categorical_accuracy']
+            print(f' - best_val_categorical_accuracy: {best_val_categorical_accuracy:.4f}')
 
     os.makedirs('checkpoints')
     model.fit(
@@ -130,12 +146,11 @@ if __name__ == '__main__':
             #     restore_best_weights=True
             # ),
             keras.callbacks.LambdaCallback(
-                on_epoch_end=update_sharpening
+                on_epoch_end=update_best
             )
         ],
         verbose=1
     )
 
-    result = model.evaluate(ds_validate.batch(1024*4), verbose=0)
-    result = dict(zip(model.metrics_names, result))
-    print(f'val_categorical_accuracy: {result["categorical_accuracy"]}')
+
+    print(f' - best_val_categorical_accuracy: {best_val_categorical_accuracy:.4f}')

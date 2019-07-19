@@ -17,5 +17,5 @@ label      | ~val_categorical_accuracy
 supervised | 56%
 mixup      | 60%
 semi       | 57% (maybe better with search)
-mixmatch   | 67% (only train-predicted)
+mixmatch   | 67% (only semi-supervised)
 mixmatch   | 50%
