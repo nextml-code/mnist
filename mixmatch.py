@@ -23,6 +23,8 @@ if __name__ == '__main__':
     parser.add_argument('--gradient_clipvalue', default=2.0, type=float)
     parser.add_argument('--n_predictions', default=10, type=int)
     parser.add_argument('--sharpen_exponent', default=2.0, type=float)
+    parser.add_argument('--n_supervised', default=1, type=int)
+    parser.add_argument('--n_unsupervised', default=1, type=int)
     parser.add_argument('--n_mixup_supervised', default=1, type=int)
     parser.add_argument('--n_mixup_semisupervised', default=1, type=int)
     parser.add_argument('--n_mixup_unsupervised', default=1, type=int)
@@ -83,8 +85,8 @@ if __name__ == '__main__':
             data.mixup_datasets((ds_fit_unsupervised.skip(100), ds_fit_unsupervised.skip(500))).map(lambda image, label: (image, label, 1.0)),
         ),
         (
-            0,
-            0,
+            config['n_supervised'],
+            config['n_unsupervised'],
             config['n_mixup_supervised'],
             config['n_mixup_semisupervised'],
             config['n_mixup_unsupervised']
