@@ -45,6 +45,7 @@ def compile_model(model, config):
         ),
         loss=dict(
             probabilities=tf.keras.losses.CategoricalCrossentropy(),
+            # probabilities=tf.keras.losses.MeanSquaredError(),
         ),
         metrics=dict(
             probabilities=[

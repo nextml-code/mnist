@@ -17,33 +17,45 @@ import architecture
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument('--steps_per_epoch', default=100, type=int)
+    parser.add_argument('--max_epochs', default=100, type=int)
+    parser.add_argument('--steps_per_epoch', default=10, type=int)
+    parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--learning_rate', default=0.001, type=float)
-    parser.add_argument('--batch_size', default=64, type=int)
     parser.add_argument('--gradient_clipvalue', default=2.0, type=float)
-    parser.add_argument('--n_predictions', default=10, type=int)
-    parser.add_argument('--sharpen_exponent', default=2.0, type=float)
-    parser.add_argument('--n_supervised', default=1, type=int)
-    parser.add_argument('--n_unsupervised', default=1, type=int)
-    parser.add_argument('--n_mixup_supervised', default=1, type=int)
+    parser.add_argument('--n_predictions', default=4, type=int)
+    parser.add_argument('--sharpen_exponent', default=6.0, type=float)
+    parser.add_argument('--n_supervised', default=0, type=int)
+    parser.add_argument('--n_unsupervised', default=0, type=int)
+    parser.add_argument('--n_mixup_supervised', default=0, type=int)
     parser.add_argument('--n_mixup_semisupervised', default=1, type=int)
-    parser.add_argument('--n_mixup_unsupervised', default=1, type=int)
+    parser.add_argument('--n_mixup_unsupervised', default=0, type=int)
+    parser.add_argument('--problem_train_size', default=0.0002, type=float)
     parser.add_argument('--seed', default=np.random.randint(1000), type=int)
 
     args = parser.parse_args()
     config = vars(args)
     config.update(
-        max_epochs=100,
+        evaluation_batch_size=1024*4
     )
 
-    image_train, label_train = problem.get_data(problem.TRAIN)
-    image_validate, label_validate = problem.get_data(problem.VALIDATE)
+    image_train, label_train = problem.get_data(
+        problem.TRAIN,
+        train_size=config['problem_train_size']
+    )
+    image_validate, label_validate = problem.get_data(
+        problem.VALIDATE,
+        train_size=config['problem_train_size']
+    )
 
     ds_train = data.get_standard_ds(image_train, label_train)
     ds_validate = data.get_standard_ds(image_validate, label_validate)
 
     model = architecture.get_model(config)
     architecture.compile_model(model, config)
+
+    if os.path.exists('model'):
+        print('Loading model checkpoint')
+        model.load_weights(os.path.join('model', 'checkpoints', 'best_weights.h5'))
 
     ds_train_shuffled = data.shuffle_dataset(ds_train, len(label_train))
     ds_validate_shuffled = data.shuffle_dataset(ds_validate, len(label_validate))
@@ -78,11 +90,11 @@ if __name__ == '__main__':
 
     ds_fit = data.merge_datasets(
         (
-            ds_fit_supervised.map(lambda image, label: (image, label, 1.0)),
-            ds_fit_unsupervised.map(lambda image, label: (image, label, 1.0)),
-            data.mixup_datasets((ds_fit_supervised, ds_fit_supervised)).map(lambda image, label: (image, label, 1.0)),
-            data.mixup_datasets((ds_fit_supervised.skip(15), ds_fit_unsupervised)).map(lambda image, label: (image, label, 1.0)),
-            data.mixup_datasets((ds_fit_unsupervised.skip(100), ds_fit_unsupervised.skip(500))).map(lambda image, label: (image, label, 1.0)),
+            ds_fit_supervised,
+            ds_fit_unsupervised,
+            data.mixup_datasets((ds_fit_supervised.skip(3), ds_fit_supervised.skip(20))),
+            data.mixup_datasets((ds_fit_supervised.skip(15), ds_fit_unsupervised.skip(200))),
+            data.mixup_datasets((ds_fit_unsupervised.skip(100), ds_fit_unsupervised.skip(500))),
         ),
         (
             config['n_supervised'],
@@ -113,29 +125,29 @@ if __name__ == '__main__':
     os.makedirs('checkpoints')
     model.fit(
         ds_fit.batch(config['batch_size']),
-        validation_data=ds_validate.batch(1024*4),
+        validation_data=ds_validate.batch(config['evaluation_batch_size']),
         epochs=config['max_epochs'],
-        steps_per_epoch=10,
+        steps_per_epoch=config['steps_per_epoch'],
         callbacks=[
             keras.callbacks.TensorBoard(
                 log_dir='tb',
                 update_freq='batch',
                 histogram_freq=0,
-                # write_graph=True,
-                # write_images=True
+                write_graph=False,
+                write_images=False
             ),
             keras.callbacks.ModelCheckpoint(
-                filepath='checkpoints/epoch{epoch}.h5',
-                # save_best_only=True,
+                filepath='checkpoints/best_weights.h5',
+                save_best_only=True,
                 save_weights_only=True,
-                # monitor='val_loss',
+                monitor='val_categorical_accuracy',
                 verbose=1
             ),
             keras.callbacks.ReduceLROnPlateau(
-                monitor='val_categorical_accuracy',
-                mode='max',
+                monitor='loss',
+                mode='min',
                 factor=0.2,
-                patience=10,
+                patience=5,
                 min_lr=0.00001,
                 verbose=1
             ),

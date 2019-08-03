@@ -7,7 +7,6 @@ import tensorflow.keras as keras
 import tensorflow_probability as tfp
 import numpy as np
 import os
-import albumentations
 from functools import reduce
 import argparse
 
@@ -47,49 +46,11 @@ image_augmentor = keras.preprocessing.image.ImageDataGenerator(
     # brightness_range=[0.1, 1],
 )
 
-albumentations_augmentor = albumentations.Compose([
-    # albumentations.IAAPerspective(always_apply=True),
-    # albumentations.IAAAffine(always_apply=True),
-    albumentations.OneOf([
-        albumentations.OpticalDistortion(p=0.3, border_mode=0),
-        albumentations.GridDistortion(num_steps=3, distort_limit=0.3, border_mode=0),
-        albumentations.ElasticTransform(alpha=10, sigma=5, alpha_affine=5, border_mode=0),
-    ], p=0.8),
-    # albumentations.OneOf([
-        # albumentations.IAAAdditiveGaussianNoise(),
-        albumentations.GaussNoise(var_limit=(0.01, 0.05)),
-    # ], p=0.4),
-    albumentations.OneOf([
-        albumentations.MotionBlur(p=0.2, always_apply=True),
-        albumentations.MedianBlur(blur_limit=3, p=0.1),
-        albumentations.Blur(blur_limit=1, p=0.1),
-    ], p=0.4),
-    albumentations.OneOf([
-        albumentations.IAASharpen(),
-        albumentations.IAAEmboss(),
-        albumentations.RandomBrightnessContrast(brightness_limit=0.9, contrast_limit=0.9),
-    ], p=0.5),
-    # albumentations.RandomGamma(),
-    # albumentations.RandomScale(),
-    # albumentations.RandomSnow(),
-    # albumentations.RandomRain(),
-    # albumentations.RandomFog(),
-    # albumentations.CoarseDropout(),
-])
-
 def random_transform(image):
     image = image_augmentor.random_transform(image)
     return image
-    # result = albumentations_augmentor(image=image)# * 255.0)
-    # return result['image'] #/ 255.0
 
 
-# images = problem.get_data(problem.VALIDATE)[0]
-# import matplotlib.pyplot as plt
-# image = random_transform(preprocess_image(images[0]))[...,0]
-# print(image.min(), image.max())
-# plt.imshow(image, vmin=0.0, vmax=1.0, cmap='gray')
-# %%
 def augment(image):
     return tf.reshape(tf.numpy_function(
         func=random_transform,
