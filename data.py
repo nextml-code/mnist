@@ -76,13 +76,6 @@ def sharpen(probs, exponent):
     return p / tf.reduce_sum(p, axis=-1, keepdims=True)
 
 
-def argmax_sharpen():
-    return tf.cast(
-        tf.equal(predicted, tf.reduce_max(predicted, axis=-1, keepdims=True)),
-        tf.float32
-    )
-
-
 def predict_batch(model, image):
     return tf.reshape(tf.py_function(
         func=model.predict_on_batch,
@@ -101,15 +94,15 @@ def merge_datasets(datasets, ns):
     )
 
 
-def get_mixup_weights():
-    # p = tfp.distributions.Beta(a, b).sample(shape)
+def get_mixup_weights(maximum=True):
     p = tfp.distributions.Beta(0.5, 0.5).sample((1,))
-    p = tf.maximum(p, 1 - p)
+    if maximum:
+        p = tf.maximum(p, 1 - p)
     return tf.concat([p, (1 - p)], axis=0)
 
 
-def mixup_items(items):
-    weights = get_mixup_weights()
+def mixup_items(items, weight_func):
+    weights = weight_func()
     weights /= tf.reduce_sum(weights)
 
     return tuple([
@@ -118,8 +111,10 @@ def mixup_items(items):
     ])
 
 
-def mixup_datasets(datasets):
+def mixup_datasets(datasets, weight_func=None):
+    if weight_func is None:
+        weight_func = get_mixup_weights
     return (
         tf.data.Dataset.zip(datasets)
-        .map(lambda *items: mixup_items(items))
+        .map(lambda *items: mixup_items(items, weight_func))
     )

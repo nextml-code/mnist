@@ -7,6 +7,7 @@ import tensorflow.keras as keras
 import tensorflow_probability as tfp
 import numpy as np
 import os
+import random
 import argparse
 
 import problem
@@ -20,7 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_epochs', default=100, type=int)
     parser.add_argument('--steps_per_epoch', default=10, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
-    parser.add_argument('--learning_rate', default=0.001, type=float)
+    parser.add_argument('--learning_rate', default=0.002, type=float)
     parser.add_argument('--gradient_clipvalue', default=2.0, type=float)
     parser.add_argument('--n_predictions', default=4, type=int)
     parser.add_argument('--sharpen_exponent', default=6.0, type=float)
@@ -28,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_unsupervised', default=0, type=int)
     parser.add_argument('--n_mixup_supervised', default=0, type=int)
     parser.add_argument('--n_mixup_semisupervised', default=1, type=int)
+    parser.add_argument('--n_mixup_semisupervised_reverse', default=0, type=int)
     parser.add_argument('--n_mixup_unsupervised', default=0, type=int)
     parser.add_argument('--problem_train_size', default=0.0002, type=float)
     parser.add_argument('--seed', default=np.random.randint(1000), type=int)
@@ -38,6 +40,10 @@ if __name__ == '__main__':
         evaluation_batch_size=1024*4
     )
 
+    np.random.seed(seed=config['seed'])
+    random.seed(np.random.randint(config['seed']))
+    tf.random.set_seed(np.random.randint(config['seed']))
+
     image_train, label_train = problem.get_data(
         problem.TRAIN,
         train_size=config['problem_train_size']
@@ -46,9 +52,14 @@ if __name__ == '__main__':
         problem.VALIDATE,
         train_size=config['problem_train_size']
     )
+    image_test, label_test = problem.get_data(
+        problem.TEST,
+        train_size=config['problem_train_size']
+    )
 
     ds_train = data.get_standard_ds(image_train, label_train)
     ds_validate = data.get_standard_ds(image_validate, label_validate)
+    ds_test = data.get_standard_ds(image_test, label_test)
 
     model = architecture.get_model(config)
     architecture.compile_model(model, config)
@@ -69,8 +80,8 @@ if __name__ == '__main__':
         .map(lambda image, _: data.augment(image))
         .batch(config['batch_size']*config['n_predictions'])
         .map(lambda image: data.predict_batch(model, image))
-        .map(lambda prediction: data.sharpen(prediction, config['sharpen_exponent']))
         .unbatch()
+        .map(lambda prediction: data.sharpen(prediction, config['sharpen_exponent'])) # TODO: should sharpen after mean
         .batch(config['n_predictions'])
         .map(lambda predictions: tf.reduce_mean(predictions, axis=0))
     )
@@ -94,6 +105,7 @@ if __name__ == '__main__':
             ds_fit_unsupervised,
             data.mixup_datasets((ds_fit_supervised.skip(3), ds_fit_supervised.skip(20))),
             data.mixup_datasets((ds_fit_supervised.skip(15), ds_fit_unsupervised.skip(200))),
+            data.mixup_datasets((ds_fit_unsupervised.skip(350), ds_fit_supervised.skip(7))),
             data.mixup_datasets((ds_fit_unsupervised.skip(100), ds_fit_unsupervised.skip(500))),
         ),
         (
@@ -101,6 +113,7 @@ if __name__ == '__main__':
             config['n_unsupervised'],
             config['n_mixup_supervised'],
             config['n_mixup_semisupervised'],
+            config['n_mixup_semisupervised_reverse'],
             config['n_mixup_unsupervised']
         )
     )
@@ -121,6 +134,12 @@ if __name__ == '__main__':
         if logs['val_categorical_accuracy'] >= best_val_categorical_accuracy:
             best_val_categorical_accuracy = logs['val_categorical_accuracy']
             print(f' - best_val_categorical_accuracy: {best_val_categorical_accuracy:.4f}')
+
+            test_metrics = model.evaluate(
+                ds_test.batch(config['evaluation_batch_size'])
+            )
+            print(f' - test_categorical_accuracy: {test_metrics[1]:.4f}')
+
 
     os.makedirs('checkpoints')
     model.fit(
@@ -143,25 +162,17 @@ if __name__ == '__main__':
                 monitor='val_categorical_accuracy',
                 verbose=1
             ),
-            keras.callbacks.ReduceLROnPlateau(
-                monitor='loss',
-                mode='min',
-                factor=0.2,
-                patience=5,
-                min_lr=0.00001,
-                verbose=1
-            ),
             # keras.callbacks.EarlyStopping(
             #     monitor='val_categorical_accuracy',
             #     mode='max',
             #     min_delta=1e-2,
-            #     patience=15,
+            #     patience=20,
             #     verbose=1,
             #     restore_best_weights=True
             # ),
             keras.callbacks.LambdaCallback(
                 on_epoch_end=update_best
-            )
+            ),
         ],
         verbose=1
     )
