@@ -13,7 +13,7 @@ cloudpickle==1.1.1
 cryptography==2.7
 cycler==0.10.0
 daemonize==2.5.0
-dask==1.2.2
+dask==2021.10.0
 decorator==4.4.0
 defusedxml==0.6.0
 docutils==0.14
